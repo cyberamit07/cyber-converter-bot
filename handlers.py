@@ -4,7 +4,7 @@ from typing import Dict
 
 from aiogram import Router, types
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyParameters
+from aiogram.types import Message
 
 from config import settings
 from regex import parse_currency_message
@@ -85,7 +85,13 @@ async def help_command(message: Message) -> None:
     await message.reply(text, parse_mode="Markdown")
 
 @router.message(Command("rate"))
-async def rate_command(message: Message, rate_fetcher: RateFetcher) -> None:
+async def rate_command(message: Message) -> None:
+    # Get rate_fetcher from workflow data
+    rate_fetcher = message.bot.workflow_data.get("rate_fetcher")
+    if not rate_fetcher:
+        await message.reply("⚠️ Bot is initializing. Please try again.")
+        return
+    
     try:
         rates = await rate_fetcher.get_rates(force_refresh=True)
         if not rates:
@@ -122,7 +128,12 @@ async def ping_command(message: Message) -> None:
     )
 
 @router.message()
-async def handle_currency(message: Message, rate_fetcher: RateFetcher) -> None:
+async def handle_currency(message: Message) -> None:
+    # Get rate_fetcher from workflow data
+    rate_fetcher = message.bot.workflow_data.get("rate_fetcher")
+    if not rate_fetcher:
+        return
+    
     if not message.text:
         return
     
@@ -144,18 +155,18 @@ async def handle_currency(message: Message, rate_fetcher: RateFetcher) -> None:
         if not conversions:
             await message.reply(
                 "⚠️ Unable to fetch exchange rates. Please try again.",
-                reply_parameters=ReplyParameters(message_id=message.message_id)
+                reply_parameters=types.ReplyParameters(message_id=message.message_id)
             )
             return
         
         response = format_conversion(currency, amount, conversions)
         await message.reply(
             response,
-            reply_parameters=ReplyParameters(message_id=message.message_id)
+            reply_parameters=types.ReplyParameters(message_id=message.message_id)
         )
     except Exception as e:
         logger.error(f"Currency processing error: {e}")
         await message.reply(
             "⚠️ Unable to process your request. Please try again.",
-            reply_parameters=ReplyParameters(message_id=message.message_id)
+            reply_parameters=types.ReplyParameters(message_id=message.message_id)
         )
