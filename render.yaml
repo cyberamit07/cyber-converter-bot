@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: currency-bot
+    runtime: python
+    repo: https://github.com/yourusername/currency-bot
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        value: 8353088470:AAE4r0flce7s3rmyqaPLuKHpuX5Lx8Vn50c
+      - key: GETBLOCK_API_KEY
+        sync: false
+      - key: API_TIMEOUT
+        value: 10
+      - key: CACHE_TTL
+        value: 30
+      - key: MAX_RETRIES
+        value: 3
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
