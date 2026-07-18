@@ -28,31 +28,33 @@ class RateFetcher:
         retry=retry_if_exception(lambda e: isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)))
     )
     async def _fetch_ton_getblock(self) -> float:
-        """Fetch TON price from GetBlock API - FASTEST"""
+        """Fetch TON price from GetBlock API"""
         if not self.use_getblock:
             return 0
         
-        headers = {
-            "x-api-key": settings.getblock_api_key,
-            "Content-Type": "application/json"
-        }
-        
-        # GetBlock TON price endpoint
-        async with self.session.get(
-            f"{settings.getblock_url}/v1/ton/price",
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=settings.api_timeout)
-        ) as response:
-            if response.status != 200:
-                logger.warning(f"GetBlock API error: {response.status}")
-                return 0
+        try:
+            headers = {
+                "x-api-key": settings.getblock_api_key,
+                "Content-Type": "application/json"
+            }
             
-            data = await response.json()
-            # Parse GetBlock response
-            price = data.get("price_usd", 0)
-            if price and price > 0:
-                logger.info(f"✅ GetBlock TON price: ${price}")
-                return price
+            async with self.session.get(
+                f"{settings.getblock_url}/v1/ton/price",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=settings.api_timeout)
+            ) as response:
+                if response.status != 200:
+                    logger.warning(f"GetBlock API error: {response.status}")
+                    return 0
+                
+                data = await response.json()
+                price = data.get("price_usd", 0)
+                if price and price > 0:
+                    logger.info(f"✅ GetBlock TON price: ${price}")
+                    return price
+                return 0
+        except Exception as e:
+            logger.warning(f"GetBlock API exception: {e}")
             return 0
     
     @retry(
@@ -61,48 +63,34 @@ class RateFetcher:
         retry=retry_if_exception(lambda e: isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)))
     )
     async def _fetch_coingecko(self) -> Dict[str, float]:
-        """Fetch rates from CoinGecko (fallback)"""
-        params = {
-            "ids": "the-open-network,tether",
-            "vs_currencies": "usd"
-        }
-        
-        async with self.session.get(
-            settings.coingecko_api,
-            params=params,
-            timeout=aiohttp.ClientTimeout(total=settings.api_timeout)
-        ) as response:
-            if response.status != 200:
-                raise Exception(f"CoinGecko API error: {response.status}")
-            
-            data = await response.json()
-            rates = {
-                'ton': data.get('the-open-network', {}).get('usd', 0),
-                'usdt': data.get('tether', {}).get('usd', 0),
-                'usd': 1.0,
+        """Fetch rates from CoinGecko"""
+        try:
+            params = {
+                "ids": "the-open-network,tether",
+                "vs_currencies": "usd"
             }
             
-            # Get fiat rates
-            try:
-                rates['inr'] = await self._get_fiat_rate("INR")
-                rates['rub'] = await self._get_fiat_rate("RUB")
-                rates['eur'] = await self._get_fiat_rate("EUR")
-            except Exception as e:
-                logger.warning(f"Failed to fetch fiat rates: {e}")
-                rates['inr'] = 83.0
-                rates['rub'] = 92.0
-                rates['eur'] = 0.92
-            
-            return rates
+            async with self.session.get(
+                settings.coingecko_api,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=settings.api_timeout)
+            ) as response:
+                if response.status != 200:
+                    raise Exception(f"CoinGecko API error: {response.status}")
+                
+                data = await response.json()
+                return {
+                    'ton': data.get('the-open-network', {}).get('usd', 0),
+                    'usdt': data.get('tether', {}).get('usd', 0),
+                    'usd': 1.0,
+                }
+        except Exception as e:
+            logger.warning(f"CoinGecko API failed: {e}")
+            return {'ton': 0, 'usdt': 1.0, 'usd': 1.0}
     
-    @retry(
-        stop=stop_after_attempt(settings.max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception(lambda e: isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)))
-    )
-    async def _get_fiat_rate(self, currency: str) -> float:
-        """Get fiat currency rate"""
-        fallback_rates = {"INR": 83.0, "RUB": 92.0, "EUR": 0.92}
+    async def _get_fiat_rates(self) -> Dict[str, float]:
+        """Get fiat currency rates"""
+        fallback = {'inr': 83.0, 'rub': 92.0, 'eur': 0.92}
         
         try:
             async with self.session.get(
@@ -111,10 +99,15 @@ class RateFetcher:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get('rates', {}).get(currency, fallback_rates.get(currency, 0))
-                return fallback_rates.get(currency, 0)
+                    rates = data.get('rates', {})
+                    return {
+                        'inr': rates.get('INR', fallback['inr']),
+                        'rub': rates.get('RUB', fallback['rub']),
+                        'eur': rates.get('EUR', fallback['eur']),
+                    }
+                return fallback
         except:
-            return fallback_rates.get(currency, 0)
+            return fallback
     
     async def _get_star_rate(self) -> float:
         """Telegram Stars rate (1 Star = $0.01 USD)"""
@@ -131,58 +124,46 @@ class RateFetcher:
         try:
             logger.info("🔄 Fetching fresh exchange rates...")
             
-            # Get TON price from GetBlock (primary)
+            # Get TON price from GetBlock
             ton_price = await self._fetch_ton_getblock()
             
-            # Get other rates from CoinGecko
-            try:
-                rates = await self._fetch_coingecko()
-            except Exception as e:
-                logger.warning(f"CoinGecko API failed: {e}, using fallback")
-                rates = {
-                    'ton': 0,
-                    'usdt': 1.0,
-                    'usd': 1.0,
-                    'inr': 83.0,
-                    'rub': 92.0,
-                    'eur': 0.92,
-                }
+            # Get crypto rates from CoinGecko
+            crypto_rates = await self._fetch_coingecko()
             
-            # Use GetBlock price if available, else fallback to CoinGecko
-            if ton_price and ton_price > 0:
-                rates['ton'] = ton_price
-            elif rates.get('ton', 0) <= 0:
-                rates['ton'] = 2.5  # Ultimate fallback
+            # Get fiat rates
+            fiat_rates = await self._get_fiat_rates()
             
-            # Get Star rate
-            rates['star'] = await self._get_star_rate()
+            # Build rates dict
+            rates = {
+                'ton': ton_price if ton_price > 0 else crypto_rates.get('ton', 2.5),
+                'usdt': crypto_rates.get('usdt', 1.0),
+                'usd': 1.0,
+                'inr': fiat_rates.get('inr', 83.0),
+                'rub': fiat_rates.get('rub', 92.0),
+                'eur': fiat_rates.get('eur', 0.92),
+                'star': await self._get_star_rate(),
+            }
             
             # Cache the rates
             await cache.set(self.cache_key, rates, ttl=settings.cache_ttl)
             self.last_fetch_time = datetime.now()
             
-            logger.info(f"✅ Rates updated: TON=${rates['ton']:.4f}, USDT=${rates['usdt']:.4f}")
+            logger.info(f"✅ Rates updated: TON=${rates['ton']:.4f}")
             return rates
             
         except Exception as e:
             logger.error(f"❌ Failed to fetch rates: {e}")
-            # Return fallback rates from cache if available
+            # Return cached or fallback
             cached = await cache.get(self.cache_key)
             if cached:
                 return cached
             
-            # Ultimate fallback
-            fallback_rates = {
-                'ton': 2.5,
-                'usdt': 1.0,
-                'usd': 1.0,
-                'inr': 83.0,
-                'rub': 92.0,
-                'eur': 0.92,
-                'star': 0.01,
+            fallback = {
+                'ton': 2.5, 'usdt': 1.0, 'usd': 1.0,
+                'inr': 83.0, 'rub': 92.0, 'eur': 0.92, 'star': 0.01,
             }
-            await cache.set(self.cache_key, fallback_rates, ttl=30)
-            return fallback_rates
+            await cache.set(self.cache_key, fallback, ttl=30)
+            return fallback
     
     async def get_conversion(self, currency: str, amount: float) -> Optional[Dict[str, float]]:
         """Get conversions for a currency"""
