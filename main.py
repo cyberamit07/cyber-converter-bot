@@ -3,7 +3,7 @@ import logging
 import sys
 
 import aiohttp
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
@@ -72,9 +72,9 @@ async def main():
         dp.workflow_data["rate_fetcher"] = rate_fetcher
         
         logger.info("⏳ Starting polling...")
+        # FIXED: Removed allowed_updates parameter
         await dp.start_polling(
             bot,
-            allowed_updates=types.AllowedUpdates.MESSAGE,
             skip_updates=True
         )
     except KeyboardInterrupt:
